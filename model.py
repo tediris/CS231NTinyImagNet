@@ -85,6 +85,9 @@ class ImageModel:
 
         # training_now = training is not None
 
+        # setup the saver object
+        saver = tf.train.Saver(tf.trainable_variables())
+
         # setting up variables we want to compute (and optimizing)
         # if we have a training function, add that to things we compute
         variables = [self.loss, correct_prediction, accuracy]
@@ -123,6 +126,7 @@ class ImageModel:
                     print("Iteration {0}: with minibatch training loss = {1:.3g} and accuracy of {2:.2g}"\
                           .format(iter_cnt,loss,np.sum(corr)/actual_batch_size))
                 iter_cnt += 1
+            saver.save(sess, "/ckpts/model.ckpt", global_step=e)
             total_correct = correct/Xd.shape[0]
             total_loss = np.sum(losses)/Xd.shape[0]
             print("Epoch {2}, Overall loss = {0:.3g} and accuracy of {1:.3g}"\
@@ -187,6 +191,8 @@ class ImageModel:
                     print("Iteration {0}: with minibatch training loss = {1:.3g} and accuracy of {2:.2g}"\
                           .format(iter_cnt,loss,np.sum(corr)/actual_batch_size))
                 iter_cnt += 1
+
+            # save the current model
             total_correct = correct/Xd.shape[0]
             total_loss = np.sum(losses)/Xd.shape[0]
             print("Epoch {2}, Overall loss = {0:.3g} and accuracy of {1:.3g}"\
