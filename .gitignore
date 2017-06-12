@@ -4,3 +4,4 @@ squeezenet/*
 __pycache__/
 .DS_Store
 ckpts/*
+logs/*

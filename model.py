@@ -6,6 +6,7 @@ from basic_module import basic_module
 from attention_module import attention_module
 from maxout import maxout
 from attention.resnext import *
+from attention.inception import inception_memnet, inception_memnet_v2, inception_memnet_v3, inception_memnet_v4
 
 class ImageModel:
     def __init__(self):
@@ -14,17 +15,50 @@ class ImageModel:
         self.loss = self.add_loss_op(self.y_out)
         self.training_op = self.add_optimization_op(self.loss)
 
+        # tensorboard reporting
+        self.writer = tf.summary.FileWriter('logs/v_simple')
+        self.add_summary_op()
+
+    def add_summary_op(self):
+        self.train_acc_placeholder = tf.placeholder(tf.float32, name='train_acc')
+        self.train_loss_placeholder = tf.placeholder(tf.float32, name='train_loss')
+        self.valid_acc_placeholder = tf.placeholder(tf.float32, name='valid_acc')
+        self.valid_loss_placeholder = tf.placeholder(tf.float32, name='valid_loss')
+
+        train_acc_sum = tf.summary.scalar("train_accuracy", self.train_acc_placeholder)
+        train_loss_sum = tf.summary.scalar("train_loss", self.train_loss_placeholder)
+        valid_acc_sum = tf.summary.scalar("validation_accuracy", self.valid_acc_placeholder)
+        valid_loss_sum = tf.summary.scalar("validation_loss", self.valid_loss_placeholder)
+        self.merged_info = tf.summary.merge_all()
+
+    def record_summary(self, session, t_loss, t_acc, v_loss, v_acc, epoch):
+        feed_dict = {}
+        feed_dict[self.train_acc_placeholder] = t_acc
+        feed_dict[self.train_loss_placeholder] = t_loss
+        feed_dict[self.valid_acc_placeholder] = v_acc
+        feed_dict[self.valid_loss_placeholder] = v_loss
+
+        summary = session.run([self.merged_info], feed_dict)
+        self.writer.add_summary(summary[0], epoch)
+
     def add_placeholders(self):
         self.X = tf.placeholder(tf.float32, [None, 64, 64, 3])
         self.y = tf.placeholder(tf.int64, [None])
         self.keep_prob = tf.placeholder(tf.float32)
         self.is_training = tf.placeholder(tf.bool)
+        self.iteration = tf.placeholder(tf.int32)
 
     def add_prediction_op(self):
-        x = resnext_model(self.X, self.is_training)
-        a_flat = tf.reshape(x,[-1, 512])
-        dropout = tf.layers.dropout(inputs=a_flat, rate=0.4, training=self.is_training)
-        y_out = tf.layers.dense(inputs=a_flat, units=200)
+        # x = resnext_model(self.X, self.is_training)
+        x = inception_memnet(self.X, self.is_training)
+        # x = inception_memnet_v2(self.X, self.is_training)
+        # x = inception_memnet_v4(self.X, self.is_training)
+        # a_flat = tf.reshape(x,[-1, 512])
+        dropout = tf.layers.dropout(inputs=x, rate=0.3, training=self.is_training)
+        # y_out = tf.layers.dense(inputs=dropout, units=200)
+        hidden = tf.layers.dense(inputs=dropout, units=1000)
+        # dropout = tf.layers.dropout(inputs=hidden, rate=0.2, training=self.is_training)
+        y_out = tf.layers.dense(inputs=hidden, units=200)
         return y_out
 
     def add_loss_op(self, y_out):
@@ -34,7 +68,10 @@ class ImageModel:
         return mean_loss
 
     def add_optimization_op(self, loss):
-        optimizer = tf.train.AdamOptimizer() # select optimizer and set learning rate
+        # lr = tf.train.exponential_decay(1e-3, self.iteration, 1000, 0.96, staircase=True)
+        # lr = tf.train.exponential_decay(1e-3, self.iteration, 1000, 0.96, staircase=True)
+        lr = 3e-5
+        optimizer = tf.train.AdamOptimizer(lr) # select optimizer and set learning rate
         # batch normalization in tensorflow requires this extra dependency
         extra_update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(extra_update_ops):
@@ -73,20 +110,18 @@ class ImageModel:
         total_loss = np.sum(losses)/Xd.shape[0]
         print("VALIDATION: Overall loss = {0:.3g} and accuracy of {1:.3g}"\
               .format(total_loss,total_correct))
+        return total_loss, total_correct
 
     def run_with_valid(self, session, Xd, yd, Xv, yv, epochs=1, batch_size=32, print_every=200):
         # have tensorflow compute accuracy
         correct_prediction = tf.equal(tf.argmax(self.y_out,1), self.y)
         accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
-        # shuffle indicies
-        train_indicies = np.arange(Xd.shape[0])
-        np.random.shuffle(train_indicies)
-
         # training_now = training is not None
 
         # setup the saver object
-        saver = tf.train.Saver(tf.trainable_variables())
+        # saver = tf.train.Saver(tf.trainable_variables())
+        saver = tf.train.Saver(max_to_keep=epochs)
 
         # setting up variables we want to compute (and optimizing)
         # if we have a training function, add that to things we compute
@@ -95,7 +130,11 @@ class ImageModel:
 
         # counter
         iter_cnt = 0
-        for e in range(epochs):
+        for e in range(11, epochs):
+            # shuffle indicies
+            train_indicies = np.arange(Xd.shape[0])
+            np.random.shuffle(train_indicies)
+
             # keep track of losses and accuracy
             correct = 0
             losses = []
@@ -105,11 +144,13 @@ class ImageModel:
                 start_idx = (i*batch_size)%Xd.shape[0]
                 idx = train_indicies[start_idx:start_idx+batch_size]
 
+
                 # create a feed dictionary for this batch
                 feed_dict = {self.X: Xd[idx,:],
                              self.y: yd[idx],
                              self.is_training: True,
-                             self.keep_prob: 0.7}
+                             self.keep_prob: 0.7,
+                             self.iteration: iter_cnt}
                 # get batch size
                 actual_batch_size = yd[i:i+batch_size].shape[0]
 
@@ -126,26 +167,51 @@ class ImageModel:
                     print("Iteration {0}: with minibatch training loss = {1:.3g} and accuracy of {2:.2g}"\
                           .format(iter_cnt,loss,np.sum(corr)/actual_batch_size))
                 iter_cnt += 1
-            saver.save(sess, "/ckpts/model.ckpt", global_step=e)
+            saver.save(session, "ckpts/v_simple/model.ckpt", global_step=e)
             total_correct = correct/Xd.shape[0]
             total_loss = np.sum(losses)/Xd.shape[0]
             print("Epoch {2}, Overall loss = {0:.3g} and accuracy of {1:.3g}"\
                   .format(total_loss,total_correct,e+1))
             # compute the validation loss and accuracy
-            self.batch_validation(session, Xv, yv, )
+            valid_loss, valid_acc = self.batch_validation(session, Xv, yv)
+            self.record_summary(session, total_loss, total_correct, valid_loss, valid_acc, e+1)
 
 
         return total_loss,total_correct
+
+    def compute_test_labels(self, session, Xd, test_files, batch_size=32):
+        predictions = tf.argmax(self.y_out,1)
+        train_indicies = np.arange(Xd.shape[0])
+        result = []
+
+        for i in range(int(math.ceil(Xd.shape[0]/batch_size))):
+            # generate indicies for the batch
+            start_idx = (i*batch_size)%Xd.shape[0]
+            idx = train_indicies[start_idx:start_idx+batch_size]
+
+            # create a feed dictionary for this batch
+            feed_dict = {self.X: Xd[idx,:],
+                         self.is_training: False}
+            variables = [predictions]
+
+            # have tensorflow compute loss and correct predictions
+            # and (if given) perform a training step
+            preds = session.run(variables,feed_dict=feed_dict)
+            # print(preds[0].shape)
+            result.extend(preds[0].tolist())
+
+        # check the result length
+        print(str(len(result)) + ": should be 10,000")
+        with open('data/wnids.txt') as wnids_file:
+            wnids = wnids_file.readlines()
+            with open('tediris.txt', 'w') as outfile:
+                for idx, pred in enumerate(result):
+                    outfile.write(test_files[idx] + " " + wnids[pred] + "")
 
     def run(self, session, Xd, yd, training, epochs=1, batch_size=32, print_every=200):
         # have tensorflow compute accuracy
         correct_prediction = tf.equal(tf.argmax(self.y_out,1), self.y)
         accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-
-        # shuffle indicies
-        train_indicies = np.arange(Xd.shape[0])
-        np.random.shuffle(train_indicies)
-
         # training_now = training is not None
 
         # setting up variables we want to compute (and optimizing)
@@ -161,6 +227,10 @@ class ImageModel:
         # counter
         iter_cnt = 0
         for e in range(epochs):
+            # shuffle indicies
+            train_indicies = np.arange(Xd.shape[0])
+            np.random.shuffle(train_indicies)
+
             # keep track of losses and accuracy
             correct = 0
             losses = []
@@ -217,6 +287,7 @@ def main():
     y_val = data['y_val']
     X_test = data['X_test']
     class_names = data['class_names']
+    test_files = data['test_files']
     # y_test = data['y_test']
 
     # print('Test labels shape: ', y_test.shape)
@@ -234,6 +305,9 @@ def main():
 
     sess = tf.Session()
     sess.run(tf.global_variables_initializer())
+    cp_saver = tf.train.Saver(tf.trainable_variables())
+    # cp_saver = tf.train.Saver()
+    cp_saver.restore(sess, "ckpts/v_simple/model.ckpt-10")
     # print('Training')
     # # logs_path = "tensorboard/" + strftime("%Y_%m_%d_%H_%M_%S", gmtime())
     # # train_writer = tf.summary.FileWriter(logs_path + '/train', session.graph)
@@ -241,7 +315,9 @@ def main():
     # print('Validation')
     # model.run(sess, X_val, y_val, False, epochs=1)
     # # run_model(sess,X_val,y_val)
-    model.run_with_valid(sess, X_train, y_train, X_val, y_val, epochs=10)
+    model.run_with_valid(sess, X_train, y_train, X_val, y_val, epochs=30, batch_size=32)
+    # print(model.batch_validation(sess, X_val, y_val))
+    # model.compute_test_labels(sess, X_test, test_files)
 
 
 if __name__ == "__main__":

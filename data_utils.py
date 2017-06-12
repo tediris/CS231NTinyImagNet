@@ -301,7 +301,9 @@ def load_tiny_imagenet(path, dtype=np.float32, subtract_mean=True):
     # images directory.
     img_files = os.listdir(os.path.join(path, 'test', 'images'))
     X_test = np.zeros((len(img_files), 3, 64, 64), dtype=dtype)
+    test_filenames = []
     for i, img_file in enumerate(img_files):
+        test_filenames.append(img_file)
         img_file = os.path.join(path, 'test', 'images', img_file)
         img = imread(img_file)
         if img.ndim == 2:
@@ -334,6 +336,7 @@ def load_tiny_imagenet(path, dtype=np.float32, subtract_mean=True):
       'y_val': y_val,
       'X_test': X_test,
       'y_test': y_test,
+      'test_files': test_filenames,
       'class_names': class_names,
       'mean_image': mean_image,
     }
